@@ -1,6 +1,6 @@
 import serial
 
-from ..utils.crc16 import calcula_CRC
+from utils.crc16 import calcula_CRC
 
 class Uart:
     conectado = False
