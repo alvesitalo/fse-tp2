@@ -16,31 +16,47 @@ class Uart:
 
         if (self.serial.isOpen()):
             self.conectado = True
-            print("Porta aberta, conexao realizada")
+            print('Porta aberta, conexao realizada')
         else:
             self.conectado = False
-            print("Porta fechada, conexao nao realizada")
+            print('Porta fechada, conexao nao realizada')
     
     def desconecta(self):
         self.serial.close()
         self.conectado = False
-        print("Porta fechada")
+        print('Porta desconectada')
 
-    def envia(self, comando, matricula):
+    def envia(self, comando, matricula, tamanho):
         if (self.conectado):
             m1 = comando + bytes(matricula)
-            m2 = calcula_CRC(m1, 7).to_bytes(2, 'little')
+            m2 = calcula_CRC(m1, tamanho).to_bytes(2, 'little')
             msg = m1 + m2
             self.serial.write(msg)
-            print("Mensagem enviada: {}".format(msg))
+            # print('Mensagem enviada: {}'.format(msg))
         else:
             self.conecta()
 
     def recebe(self):
         if (self.conectado):
-            data = self.serial.read(10)
-            print("Mensagem recebida: {}".format(data))
-            return data
+            buffer = self.serial.read(9)
+            buffer_tam = len(buffer)
+
+            if buffer_tam == 9:
+                data = buffer[3:7]
+                crc16_recebido = buffer[7:9]
+                crc16_calculado = calcula_CRC(buffer[0:7], 7).to_bytes(2, 'little')
+
+                if crc16_recebido == crc16_calculado:
+                    # print('Mensagem recebida: {}'.format(buffer))
+                    return data
+                else:
+                    print('Mensagem recebida: {}'.format(buffer))
+                    print('CRC16 invalido')
+                    return None
+            else:
+                print('Mensagem recebida: {}'.format(buffer))
+                print('Mensagem no formato incorreto, tamanho: {}'.format(buffer_tam))
+                return None
         else:
             self.conecta()
             return None
