@@ -2,7 +2,7 @@ import serial
 import time
 import struct
 
-from threading import Thread
+from threading import Event, Thread 
 from rpi_lcd import LCD
 
 from connection.uart import Uart
@@ -13,9 +13,9 @@ class AirFryer:
     timeout = 0.5
     matricula = [3, 6, 6, 6]
 
-    ligado = True
-    funcionando = False
-    enviando = False
+    ligado = Event()
+    funcionando = Event()
+    enviando = Event()
     menu = -1
     lcd = LCD()
     temp_inter = 0
@@ -27,62 +27,93 @@ class AirFryer:
         self.inicia_servicos()
 
     def liga(self):
-        enviando = True
-
+        self.enviando.set()
         comando_estado = b'\x01\x23\xd3'
-        matricula = self.matricula + [1]
 
-        self.uart.envia(comando_estado, matricula, 8)
+        self.uart.envia(comando_estado, self.matricula, b'\x01', 8)
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.ligado = True
+            self.ligado.set()
 
-        enviando = False
+        self.enviando.clear()
 
     def desliga(self):
-        enviando = True
-
+        self.enviando.set()
         comando_estado = b'\x01\x23\xd3'
-        matricula = self.matricula + [0]
 
-        self.uart.envia(comando_estado, matricula, 8)
+        self.uart.envia(comando_estado, self.matricula, b'\x00', 8)
         dados = self.uart.recebe()
 
         if dados is not None:
             self.para()
-            self.ligado = False
+            self.ligado.clear()
 
-        enviando = False
+        self.enviando.clear()
 
     def inicia(self):
-        enviando = True
-
+        self.enviando.set()
         comando_estado = b'\x01\x23\xd5'
-        matricula = self.matricula + [1]
 
-        self.uart.envia(comando_estado, matricula, 8)
+        self.uart.envia(comando_estado, self.matricula, b'\x01', 8)
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.funcionando = True
+            self.inicia_aquecimento()
 
-        enviando = False
+        self.enviando.clear()
 
     def para(self):
-        enviando = True
-
+        self.enviando.set()
         comando_estado = b'\x01\x23\xd5'
-        matricula = self.matricula + [0]
 
-        self.uart.envia(comando_estado, matricula, 8)
+        self.uart.envia(comando_estado, self.matricula, b'\x00', 8)
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.funcionando = False
+            self.para_aquecimento()
 
-        enviando = False
+        self.enviando.clear()
 
+    def inicia_aquecimento(self):
+        self.enviando.set()
+        comando_aquec = b'\x01\x23\xd1'
+        valor = (1).to_bytes(4, 'little')
+
+        self.uart.envia(comando_aquec, self.matricula, valor, 11)
+        dados = self.uart.recebe()
+
+        if dados is not None:
+            self.funcionando.set()
+
+        self.enviando.clear()
+
+    def para_aquecimento(self):
+        self.enviando.set()
+        comando_aquec = b'\x01\x23\xd1'
+        valor = (0).to_bytes(4, 'little')
+
+        self.uart.envia(comando_aquec, self.matricula, valor, 11)
+        dados = self.uart.recebe()
+
+        if dados is not None:
+            self.funcionando.clear()
+
+        self.enviando.clear()
+    
+    def seta_tempo(self, tempo):
+        self.enviando.set()
+        comando_estado = b'\x01\x23\xd6'
+        valor = tempo.to_bytes(4, 'little')
+
+        self.uart.envia(comando_estado, self.matricula, valor, 11)
+        dados = self.uart.recebe()
+
+        if dados is not None:
+            self.tempo = tempo
+
+        self.enviando.clear()
+    
     def trata_botao(self, bytes):
         botao = int.from_bytes(bytes, 'little')
         print('botao', botao)
@@ -95,9 +126,9 @@ class AirFryer:
         elif botao == 4:
             self.para()
         elif botao == 5:
-            self.tempo += 1
+            self.seta_tempo(self.tempo + 1)
         elif botao == 6:
-            self.tempo -= 1
+            self.seta_tempo(self.tempo - 1)
         elif botao == 7:
             self.abre_menu()
 
@@ -112,7 +143,7 @@ class AirFryer:
     def solicita_botao(self):
         comando_botao = b'\x01\x23\xc3'
         
-        self.uart.envia(comando_botao, self.matricula, 7)
+        self.uart.envia(comando_botao, self.matricula, b'', 7)
         dados = self.uart.recebe()
 
         if dados is not None:
@@ -121,7 +152,7 @@ class AirFryer:
     def solicita_temp_int(self):
         comando_temp = b'\x01\x23\xc1'
 
-        self.uart.envia(comando_temp, self.matricula, 7)
+        self.uart.envia(comando_temp, self.matricula, b'', 7)
         dados = self.uart.recebe()
 
         if dados is not None:
@@ -130,7 +161,7 @@ class AirFryer:
     def solicita_temp_ref(self):
         comando_temp = b'\x01\x23\xc2'
 
-        self.uart.envia(comando_temp, self.matricula, 7)
+        self.uart.envia(comando_temp, self.matricula, b'', 7)
         dados = self.uart.recebe()
 
         if dados is not None:
@@ -138,8 +169,8 @@ class AirFryer:
 
     def atualiza_lcd(self):
         while True:
-            if self.ligado:
-                if self.funcionando:
+            if self.ligado.is_set():
+                if self.funcionando.is_set():
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
                     self.lcd.text(f'Tempo:{self.tempo}', 2)
                 else:
@@ -149,7 +180,7 @@ class AirFryer:
                 self.lcd.clear()
     
     def rotina(self):
-        while not self.enviando:
+        while True:
             self.solicita_botao()
             time.sleep(0.5)
             self.solicita_botao()

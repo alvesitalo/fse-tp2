@@ -26,9 +26,9 @@ class Uart:
         self.conectado = False
         print('Porta desconectada')
 
-    def envia(self, comando, matricula, tamanho):
+    def envia(self, comando, matricula, valor, tamanho):
         if (self.conectado):
-            m1 = comando + bytes(matricula)
+            m1 = comando + bytes(matricula) + valor
             m2 = calcula_CRC(m1, tamanho).to_bytes(2, 'little')
             msg = m1 + m2
             self.serial.write(msg)
