@@ -7,6 +7,7 @@ from rpi_lcd import LCD
 
 from connection.uart import UART
 from utils.pid import PID
+from connection.forno import Forno
 
 class AirFryer:
     port = '/dev/serial0'
@@ -15,7 +16,8 @@ class AirFryer:
     matricula = [3, 6, 6, 6]
 
     ligado = Event()
-    funcionando = Event()
+    aquecendo = Event()
+    resfriando = Event()
     enviando = Event()
     menu = -1
     lcd = LCD()
@@ -26,6 +28,7 @@ class AirFryer:
     def __init__(self):
         self.uart = UART(self.port, self.baudrate, self.timeout)
         self.pid = PID()
+        self.forno = Forno()
         self.inicia_servicos()
 
     def liga(self):
@@ -62,7 +65,8 @@ class AirFryer:
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.inicia_aquecimento()
+            self.aquecendo.set()
+            self.resfriando.clear()
 
         self.enviando.clear()
 
@@ -74,38 +78,36 @@ class AirFryer:
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.para_aquecimento()
+            if self.aquecendo.is_set():
+                self.aquecendo.clear()
+                self.resfriando.set()
 
         self.enviando.clear()
 
     def abre_menu(self):
         pass
 
-    def inicia_aquecimento(self):
-        self.enviando.set()
-        comando_aquec = b'\x01\x23\xd1'
-        valor = (1).to_bytes(4, 'little')
+    def seta_forno(self):
+        pid = self.pid.pid_controle(self.temp_ref, self.temp_inter)
+        print('pid', pid)
 
-        self.uart.envia(comando_aquec, self.matricula, valor, 11)
-        dados = self.uart.recebe()
-
-        if dados is not None:
-            self.funcionando.set()
-
-        self.enviando.clear()
-
-    def para_aquecimento(self):
-        self.enviando.set()
-        comando_aquec = b'\x01\x23\xd1'
-        valor = (0).to_bytes(4, 'little')
-
-        self.uart.envia(comando_aquec, self.matricula, valor, 11)
-        dados = self.uart.recebe()
-
-        if dados is not None:
-            self.funcionando.clear()
-
-        self.enviando.clear()
+        if self.aquecendo.is_set():
+            if pid > 0:
+                self.forno.aquecer(pid)
+                self.forno.resfriar(0)
+            else:
+                pid *= -1
+                self.forno.aquecer(0)
+                if pid < 40.0:
+                    self.forno.resfriar(40.0)
+                else:
+                    self.forno.resfriar(pid)
+        elif self.resfriando.is_set():
+            self.forno.aquecer(0)
+            self.forno.resfriar(100.00)
+        else:
+            self.forno.aquecer(0)
+            self.forno.resfriar(0.0)
     
     def seta_tempo(self, tempo):
         self.enviando.set()
@@ -115,8 +117,8 @@ class AirFryer:
         self.uart.envia(comando_estado, self.matricula, valor, 11)
         dados = self.uart.recebe()
 
-        if dados is not None:
-            self.tempo = tempo
+        #if dados is not None:
+        self.tempo = tempo
 
         self.enviando.clear()
     
@@ -141,6 +143,7 @@ class AirFryer:
     def trata_temp_int(self, bytes):
         self.temp_inter = struct.unpack('f', bytes)[0]
         print('temperatura int', self.temp_inter)
+        self.seta_forno()
 
     def trata_temp_ref(self, bytes):
         self.temp_ref = struct.unpack('f', bytes)[0]
@@ -177,14 +180,18 @@ class AirFryer:
         while True:
             if self.ligado.is_set():
                 self.lcd.clear()
-                if self.funcionando.is_set():
+                if self.aquecendo.is_set():
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
-                    self.lcd.text(f'Tempo:{self.tempo}', 2)
+                    self.lcd.text(f'Aquecendo', 2)
+                elif self.resfriando.is_set():
+                    self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
+                    self.lcd.text(f'Resfriando', 2)
                 else:
-                    self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)} 2', 1)
+                    self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
                     self.lcd.text(f'Tempo: {self.tempo}', 2)
             else:
                 self.lcd.clear()
+            time.sleep(1)
     
     def rotina(self):
         while True:
