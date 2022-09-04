@@ -1,11 +1,12 @@
 import serial
+import time
 
 from utils.crc16 import calcula_CRC
 
-class Uart:
+class UART:
     conectado = False
 
-    def __init__(self, port, baudrate, timeout=2):
+    def __init__(self, port, baudrate, timeout=1):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -38,6 +39,7 @@ class Uart:
 
     def recebe(self):
         if (self.conectado):
+            time.sleep(0.2)
             buffer = self.serial.read(9)
             buffer_tam = len(buffer)
 

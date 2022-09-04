@@ -5,7 +5,8 @@ import struct
 from threading import Event, Thread 
 from rpi_lcd import LCD
 
-from connection.uart import Uart
+from connection.uart import UART
+from utils.pid import PID
 
 class AirFryer:
     port = '/dev/serial0'
@@ -23,7 +24,8 @@ class AirFryer:
     tempo = 0
 
     def __init__(self):
-        self.uart = Uart(self.port, self.baudrate, self.timeout)
+        self.uart = UART(self.port, self.baudrate, self.timeout)
+        self.pid = PID()
         self.inicia_servicos()
 
     def liga(self):
@@ -34,6 +36,7 @@ class AirFryer:
         dados = self.uart.recebe()
 
         if dados is not None:
+            self.para()
             self.ligado.set()
 
         self.enviando.clear()
@@ -74,6 +77,9 @@ class AirFryer:
             self.para_aquecimento()
 
         self.enviando.clear()
+
+    def abre_menu(self):
+        pass
 
     def inicia_aquecimento(self):
         self.enviando.set()
@@ -170,6 +176,7 @@ class AirFryer:
     def atualiza_lcd(self):
         while True:
             if self.ligado.is_set():
+                self.lcd.clear()
                 if self.funcionando.is_set():
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
                     self.lcd.text(f'Tempo:{self.tempo}', 2)
