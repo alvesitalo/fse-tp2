@@ -1,5 +1,6 @@
 import serial
 import time
+import datetime
 import struct
 
 from threading import Event, Thread 
@@ -16,14 +17,19 @@ class AirFryer:
     matricula = [3, 6, 6, 6]
 
     ligado = Event()
+    funcionando = Event()
     aquecendo = Event()
     resfriando = Event()
     enviando = Event()
-    menu = -1
+    
     lcd = LCD()
+    menu = -1
+    
     temp_inter = 0
     temp_ref = 0
-    tempo = 0
+
+    tempo_seg = 0
+    tempo_ref = 0
 
     def __init__(self):
         self.uart = UART(self.port, self.baudrate, self.timeout)
@@ -65,8 +71,7 @@ class AirFryer:
         dados = self.uart.recebe()
 
         if dados is not None:
-            self.aquecendo.set()
-            self.resfriando.clear()
+            self.funcionando.set()
 
         self.enviando.clear()
 
@@ -78,36 +83,71 @@ class AirFryer:
         dados = self.uart.recebe()
 
         if dados is not None:
-            if self.aquecendo.is_set():
-                self.aquecendo.clear()
-                self.resfriando.set()
+            self.funcionando.clear()
 
         self.enviando.clear()
 
     def abre_menu(self):
         pass
 
-    def seta_forno(self):
-        pid = self.pid.pid_controle(self.temp_ref, self.temp_inter)
-        print('pid', pid)
+    def envia_sinal_controle(self, pid):
+        self.enviando.set()
+        comando_aquec = b'\x01\x23\xd1'
+        valor = (round(pid)).to_bytes(4, 'little', signed=True)
 
-        if self.aquecendo.is_set():
-            if pid > 0:
-                self.forno.aquecer(pid)
-                self.forno.resfriar(0)
-            else:
-                pid *= -1
-                self.forno.aquecer(0)
-                if pid < 40.0:
-                    self.forno.resfriar(40.0)
+        self.uart.envia(comando_aquec, self.matricula, valor, 11)
+        dados = self.uart.recebe()
+
+        self.enviando.clear()
+
+    def seta_forno(self):
+        if self.ligado.is_set():
+            if self.funcionando.is_set() and self.tempo_seg > 0:
+                pid = self.pid.pid_controle(self.temp_ref, self.temp_inter)
+                print('pid f', pid)
+
+                self.envia_sinal_controle(pid)
+                self.conta_tempo()
+
+                if pid > 0:
+                    self.forno.aquecer(pid)
+                    self.forno.resfriar(0)
+                    self.aquecendo.set()
+                    self.resfriando.clear()
                 else:
+                    pid *= -1
+                    self.forno.aquecer(0)
+                    if pid < 40.0:
+                        self.forno.resfriar(40.0)
+                    else:
+                        self.forno.resfriar(pid)
+                    self.aquecendo.clear()
+                    self.resfriando.set()
+            else:
+                pid = self.pid.pid_controle(27.0, self.temp_inter)
+                print('pid r', pid)
+
+                self.envia_sinal_controle(pid)
+
+                if pid < 0:
+                    pid *= -1
                     self.forno.resfriar(pid)
-        elif self.resfriando.is_set():
-            self.forno.aquecer(0)
-            self.forno.resfriar(100.00)
+                    self.resfriando.set()
+                else:
+                    self.resfriando.clear()
+                self.forno.aquecer(0)
+                self.aquecendo.clear()
         else:
             self.forno.aquecer(0)
             self.forno.resfriar(0.0)
+            self.funcionando.clear()
+            self.aquecendo.clear()
+            self.resfriando.clear()
+
+    def conta_tempo(self):
+        while self.tempo_seg > 0:
+            time.sleep(1)
+            self.tempo_seg -= 1
     
     def seta_tempo(self, tempo):
         self.enviando.set()
@@ -117,8 +157,8 @@ class AirFryer:
         self.uart.envia(comando_estado, self.matricula, valor, 11)
         dados = self.uart.recebe()
 
-        #if dados is not None:
-        self.tempo = tempo
+        self.tempo_ref = tempo
+        self.tempo_seg = tempo * 60
 
         self.enviando.clear()
     
@@ -134,21 +174,31 @@ class AirFryer:
         elif botao == 4:
             self.para()
         elif botao == 5:
-            self.seta_tempo(self.tempo + 1)
+            tempo = self.tempo_ref + 1
+            self.seta_tempo(tempo + 1)
         elif botao == 6:
-            self.seta_tempo(self.tempo - 1)
+            tempo = self.tempo_ref - 1
+            if tempo < 0:
+                tempo = 0
+            self.seta_tempo(tempo - 1)
         elif botao == 7:
             self.abre_menu()
 
     def trata_temp_int(self, bytes):
-        self.temp_inter = struct.unpack('f', bytes)[0]
+        temp = struct.unpack('f', bytes)[0]
         print('temperatura int', self.temp_inter)
+
+        if temp > 0 and temp < 100:
+            self.temp_inter = temp
         self.seta_forno()
 
     def trata_temp_ref(self, bytes):
-        self.temp_ref = struct.unpack('f', bytes)[0]
-        print('temperatura ref', self.temp_ref)
+        temp = struct.unpack('f', bytes)[0]
+        print('temperatura ref', temp)
 
+        if temp > 0 and temp < 100:
+            self.temp_ref = temp
+    
     def solicita_botao(self):
         comando_botao = b'\x01\x23\xc3'
         
@@ -182,17 +232,17 @@ class AirFryer:
                 self.lcd.clear()
                 if self.aquecendo.is_set():
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
-                    self.lcd.text(f'Aquecendo', 2)
+                    self.lcd.text(f'Pre-aquecendo', 2)
                 elif self.resfriando.is_set():
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
                     self.lcd.text(f'Resfriando', 2)
                 else:
                     self.lcd.text(f'TI:{round(self.temp_inter, 2)} TR:{round(self.temp_ref, 2)}', 1)
-                    self.lcd.text(f'Tempo: {self.tempo}', 2)
+                    self.lcd.text(f'Tempo: {str(datetime.timedelta(seconds=self.tempo_seg))}', 2)
             else:
                 self.lcd.clear()
             time.sleep(1)
-    
+
     def rotina(self):
         while True:
             self.solicita_botao()
