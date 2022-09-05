@@ -124,9 +124,6 @@ class AirFryer:
                     self.aquecendo.clear()
                     self.resfriando.set()
 
-                if self.temporizador.is_set():
-                    self.conta_tempo()
-
                 if pid > 0:
                     self.forno.aquecer(pid)
                     self.forno.resfriar(0)
@@ -141,9 +138,8 @@ class AirFryer:
                 pid = self.pid.pid_controle(27.0, self.temp_inter)
                 print('pid r', pid)
 
-                self.envia_sinal_controle(pid)
-
                 if pid < 0:
+                    self.envia_sinal_controle(pid)
                     pid *= -1
                     self.forno.resfriar(pid)
                     self.resfriando.set()
@@ -205,7 +201,10 @@ class AirFryer:
 
         if temp > 0 and temp < 100:
             self.temp_inter = temp
+        
         self.seta_forno()
+        if self.temporizador.is_set():
+            self.conta_tempo()
 
     def trata_temp_ref(self, bytes):
         temp = struct.unpack('f', bytes)[0]
