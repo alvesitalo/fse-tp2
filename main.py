@@ -2,6 +2,7 @@ import serial
 import time
 import datetime
 import struct
+import math
 
 from threading import Event, Thread 
 from rpi_lcd import LCD
@@ -9,6 +10,7 @@ from rpi_lcd import LCD
 from connection.uart import UART
 from utils.pid import PID
 from connection.forno import Forno
+from utils.csv import CSV
 
 class AirFryer:
     port = '/dev/serial0'
@@ -20,6 +22,7 @@ class AirFryer:
     funcionando = Event()
     aquecendo = Event()
     resfriando = Event()
+    temporizador = Event()
     enviando = Event()
     
     lcd = LCD()
@@ -35,6 +38,7 @@ class AirFryer:
         self.uart = UART(self.port, self.baudrate, self.timeout)
         self.pid = PID()
         self.forno = Forno()
+        self.csv = CSV()
         self.inicia_servicos()
 
     def liga(self):
@@ -46,6 +50,7 @@ class AirFryer:
 
         if dados is not None:
             self.para()
+            self.seta_tempo(0)
             self.ligado.set()
 
         self.enviando.clear()
@@ -107,13 +112,24 @@ class AirFryer:
                 print('pid f', pid)
 
                 self.envia_sinal_controle(pid)
-                self.conta_tempo()
+
+                if math.isclose(self.temp_inter, self.temp_ref, rel_tol=1e-2):
+                    self.aquecendo.clear()
+                    self.resfriando.clear()
+                    self.temporizador.set()
+                elif self.temp_inter < self.temp_ref and not self.temporizador.is_set():
+                    self.aquecendo.set()
+                    self.resfriando.clear()
+                elif self.temp_inter > self.temp_ref and not self.temporizador.is_set():
+                    self.aquecendo.clear()
+                    self.resfriando.set()
+
+                if self.temporizador.is_set():
+                    self.conta_tempo()
 
                 if pid > 0:
                     self.forno.aquecer(pid)
                     self.forno.resfriar(0)
-                    self.aquecendo.set()
-                    self.resfriando.clear()
                 else:
                     pid *= -1
                     self.forno.aquecer(0)
@@ -121,8 +137,6 @@ class AirFryer:
                         self.forno.resfriar(40.0)
                     else:
                         self.forno.resfriar(pid)
-                    self.aquecendo.clear()
-                    self.resfriando.set()
             else:
                 pid = self.pid.pid_controle(27.0, self.temp_inter)
                 print('pid r', pid)
@@ -137,6 +151,7 @@ class AirFryer:
                     self.resfriando.clear()
                 self.forno.aquecer(0)
                 self.aquecendo.clear()
+                self.temporizador.clear()
         else:
             self.forno.aquecer(0)
             self.forno.resfriar(0.0)
@@ -243,6 +258,16 @@ class AirFryer:
                 self.lcd.clear()
             time.sleep(1)
 
+    def salva_log(self):
+        header = ['data', 'ti', 'tr', 'resistor/ventoinha']
+        self.csv.escrever(header)
+        
+        while True:
+            data = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+            linha = [data, self.temp_inter, self.temp_ref, self.pid.sinal_de_controle]
+            self.csv.escrever(linha)
+            time.sleep(1)
+
     def rotina(self):
         while True:
             self.solicita_botao()
@@ -260,6 +285,9 @@ class AirFryer:
 
         thread_lcd = Thread(target=self.atualiza_lcd, args=())
         thread_lcd.start()
+
+        thread_csv = Thread(target=self.salva_log, args=())
+        thread_csv.start()
 
         print('AirFryer iniciada')
 
